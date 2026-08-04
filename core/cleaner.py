@@ -3,6 +3,8 @@ import numpy as np
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler,OneHotEncoder
+from imblearn.over_sampling import RandomOverSampler
+from imblearn.under_sampling import RandomUnderSampler
 import warnings
 
 class DataCleaner:
@@ -26,7 +28,8 @@ class DataCleaner:
         self.Columns_To_Drop = [] # Tracks the universal columns to drop
         self.Is_Fitted = False  # Checks if the Data has already fitted once
         self.Expected_Type = {} # Dict of column datatypes
-
+        self.Is_Small_Or_Medium = False
+        self.Is_Sampled = False
 
     def Validating_Data(self,Data:pd.DataFrame):
         if len(Data)==0:
@@ -53,13 +56,13 @@ class DataCleaner:
 
     def Fitting(self,df:pd.DataFrame,Target_Column:None):
         self.Validating_Data(df)
-        
         Unique_Ceiling = 0.90 # For deciding to remove a column based on its uniquness only if its an object/string
         self.Columns_To_Drop = []
         self.Date_Columns = []
         Total_Rows = len(df)
         Dataframe_Copy = df.copy()
-
+        self.Is_Small_Or_Medium = True if Total_Rows <= 10000 else False
+        
         for col in Dataframe_Copy.columns:  # Identifying the columns to be removed (indentification info) 
             if Target_Column and col == Target_Column:
                 continue
@@ -117,7 +120,7 @@ class DataCleaner:
 
     def Transformation(self, df:pd.DataFrame, Target_Column:None):
         if not self.Is_Fitted:
-            raise RuntimeError("THE DATA HAS NOT BEEN FITTED, U MUST CALL .Fitting() BEFORE .Transformation().")
+            raise RuntimeError("THE DATA HAS NOT BEEN FITTED, U MUST CALL .Fitting() BEFORE .Transformation()")
         Dataframe_Copy = df.copy()
 
         # Handles the conversion of DateTime data into 5 catogries of features
@@ -173,5 +176,10 @@ class DataCleaner:
         X_Final = pd.concat([X_Num,X_Obj,X_Date],axis=1)
         # The first replace function replaces all the illegal characters and replaces them, the second one replaces spaces
         X_Final.columns = X_Final.columns.str.replace(r"[^\w\s\-]","",regex=True).str.replace(" ","_")
-        print( "TRANSFORMATION DATA IS CLEANED AND TRANSFORMED... ")
+        print("TRANSFORMATION DATA IS CLEANED AND TRANSFORMED...\n")
+        
         return ((X_Final,y) if y is not None else X_Final)
+    
+    def Sampling(self, X: pd.DataFrame, y: pd.Series):
+        if self.Is_Small_Or_Medium:
+    
