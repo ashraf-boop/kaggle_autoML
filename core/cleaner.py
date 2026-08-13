@@ -182,4 +182,4 @@ class DataCleaner:
     
     def Sampling(self, X: pd.DataFrame, y: pd.Series):
         if self.Is_Small_Or_Medium:
-    
+            print()
