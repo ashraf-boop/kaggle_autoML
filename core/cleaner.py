@@ -30,6 +30,7 @@ class DataCleaner:
         self.Expected_Type = {} # Dict of column datatypes
         self.Is_Small_Or_Medium = False
         self.Is_Sampled = False
+        self.Date_Features_To_Keep = []
 
     def Validating_Data(self,Data:pd.DataFrame):
         if len(Data)==0:
@@ -97,14 +98,23 @@ class DataCleaner:
         Columns_To_Remove= self.Columns_To_Drop + self.Date_Columns + ([Target_Column] if Target_Column and Target_Column in df.columns else [])
         X = Dataframe_Copy.drop(Columns_To_Remove,axis=1)
 
-        self.Num_Columns = X.select_dtypes(include=[np.number]).columns.tolist()
-        self.Obj_Columns = X.select_dtypes(include=["object","category","string"]).columns.tolist()
+        for col in X.columns:
+           
+            converted_series = pd.to_numeric(X[col], errors='coerce')  # Check failure rate of numeric conversion
+            failed_count = converted_series.isna().sum() - X[col].isna().sum()
+            failure_rate = failed_count / len(X) if len(X) > 0 else 0
+
+            
+            if pd.api.types.is_numeric_dtype(X[col]) or (failure_rate > 0 and failure_rate < 0.05):  # If < 5% fail conversion (or already numeric), treat as numeric column
+                self.Num_Columns.append(col)
+            else:
+                self.Obj_Columns.append(col)
 
         for col in self.Num_Columns: self.Expected_Type[col] = "numeric"
         for col in self.Obj_Columns: self.Expected_Type[col] = "categorical"
 
         if self.Num_Columns:
-            X_Num_Clean = X[self.Num_Columns].apply(pd.to_numeric)
+            X_Num_Clean = X[self.Num_Columns].apply(pd.to_numeric,errors = "coerce")
             self.NumFiller.fit(X_Num_Clean)
 
         if self.Obj_Columns:
@@ -112,6 +122,19 @@ class DataCleaner:
             X_Obj_Clean = X[self.Obj_Columns].astype(str).replace(r"^\s*$",np.nan,regex=True)
             X_Obj_Clean = X_Obj_Clean.replace(["nan","NaN","null","NULL","N/A","n/a","-"],np.nan)
             self.ObjFiller.fit(X_Obj_Clean)
+
+        Date_Features = pd.DataFrame(index=df.index)
+        for col in self.Date_Columns:
+            if col in df.columns:
+                Datetime_Series = pd.to_datetime(df[col], errors="coerce")
+                Date_Features[f"{col}_hour"] = Datetime_Series.dt.hour
+                Date_Features[f"{col}_Date"] = Datetime_Series.dt.dayofweek
+                Date_Features[f"{col}_Is_Weekend"] = Datetime_Series.dt.dayofweek.isin([5,6]).astype(int)
+                Date_Features[f"{col}_month"] = Datetime_Series.dt.month
+                Date_Features[f"{col}_year"] = Datetime_Series.dt.year
+
+        # Store only non-constant features learned from training data
+        self.Date_Features_To_Keep = [feat for feat in Date_Features.columns if Date_Features[feat].nunique() > 1]
 
         self.Is_Fitted = True
         print("FITTING DATA CLEANED,VALIDATED AND FITTED INTO THE STANDARD SCALER...")
@@ -127,20 +150,22 @@ class DataCleaner:
         Date_Features = pd.DataFrame(index=Dataframe_Copy.index)
         for col in self.Date_Columns:
             if col in Dataframe_Copy.columns:
-                Datetime_Series = pd.to_datetime(Dataframe_Copy[col],errors="coerce")
+                Datetime_Series = pd.to_datetime(Dataframe_Copy[col], errors="coerce")
                 
                 Date_Features[f"{col}_hour"] = Datetime_Series.dt.hour
                 Date_Features[f"{col}_Date"] = Datetime_Series.dt.dayofweek
                 Date_Features[f"{col}_Is_Weekend"] = Datetime_Series.dt.dayofweek.isin([5,6]).astype(int)
                 Date_Features[f"{col}_month"] = Datetime_Series.dt.month
                 Date_Features[f"{col}_year"] = Datetime_Series.dt.year
+                
+        # If there exists a column from the above with only 0 or singular value it gets dropped
+        if not Date_Features.empty:
+            modes = Date_Features.mode()
+            fill_val = modes.iloc[0] if not modes.empty else 0
+            Date_Features = Date_Features.fillna(fill_val)
 
-                # If there exists a column from the above with only 0 or singular value it gets dropped
-                for Datetime in [f"{col}_hour",f"{col}_Date",f"{col}_Is_Weekend",f"{col}_month",f"{col}_year"]:
-                    if Date_Features[Datetime].nunique() <= 1:
-                        Date_Features.drop(Datetime,axis=1,inplace=True)
-
-        X_Date = Date_Features.fillna(Date_Features.mode().iloc[0] if not Date_Features.empty else 0)
+        # Enforce the exact features learned during Fitting()
+        X_Date = Date_Features.reindex(columns=self.Date_Features_To_Keep, fill_value=0)
         Columns_To_Remove = self.Columns_To_Drop + self.Date_Columns + ([Target_Column] if Target_Column and Target_Column in df.columns else [])
 
         X = Dataframe_Copy.drop(Columns_To_Remove,axis=1)  # Feature Dataset
@@ -155,7 +180,7 @@ class DataCleaner:
             y = None
 
         if self.Num_Columns:
-            X_Num_Data = X[self.Num_Columns].apply(pd.to_numeric) # Keeps the data numeric
+            X_Num_Data = X[self.Num_Columns].apply(pd.to_numeric, errors="coerce") # Keeps the data numeric
             X_Num_Clean = self.NumFiller.transform(X_Num_Data)
             # gets the names of the new features created and the old ones 
             X_Num_Columns = self.NumFiller.get_feature_names_out(self.Num_Columns) if hasattr(self.NumFiller,"get_feature_names_out") else self.Num_Columns
