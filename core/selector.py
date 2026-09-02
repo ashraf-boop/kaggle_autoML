@@ -32,6 +32,9 @@ class FeatureSelection:
 
 
     def Prerequisites(self, X: pd.DataFrame , y: pd.Series):
+        ''' This is to calculate and catogrize the data into its length, if its classification
+            or regression type and the class imbalance if classification type'''
+
         self.Is_Small_Or_Medium = len(X) < 10000 
         self.Is_Classification_Type = True if (y.dtype == "object" or str(y.dtype) == "bool" or y.nunique() <= 10) else False
 
@@ -46,7 +49,10 @@ class FeatureSelection:
 
 
 
-    def ElasticNetFeatureSelection(self, X: pd.DataFrame , y: pd.Series):
+    def ElasticNetFeatureSelection(self, X: pd.DataFrame , y: pd.Series) ->list:
+        ''' ElasticNet based feature selection, this is carried out by LogisticRegressionCV and ElasticNetCV
+            in hand with StratifiedKFold and KFold considering variable L1 ratio values '''
+        
         print("="*40,"ELASTICNET BASED FEATURE SELECTION STARTED","="*40,sep="",end="\n\n")
 
         if self.Is_Small_Or_Medium:
@@ -86,10 +92,10 @@ class FeatureSelection:
             Classification_Type_ElasticNet_Model = LogisticRegressionCV(**LogisticRegressionCV_Hyperparameters)
             Classification_Type_ElasticNet_Model.fit(X=X,y=y)
 
-            if Classification_Type_ElasticNet_Model.coef_.shape[0] == 1:
+            if Classification_Type_ElasticNet_Model.coef_.shape[0] == 1: # Gets the features and their importance as calculated by l1
                 Rank = pd.Series(abs(Classification_Type_ElasticNet_Model.coef_[0]),index=X.columns)
             else:
-                #Gets the features and their importance as calculated by l1
+                
                 Rank = pd.Series(abs(Classification_Type_ElasticNet_Model.coef_).mean(axis=0),index=X.columns) 
               
         else:
@@ -97,12 +103,12 @@ class FeatureSelection:
             CV_Regression = KFold(n_splits=Splits,shuffle=True,random_state=69) 
 
             ElasticNetCV_Hyperparameters = {"max_iter" :Max_Itter,
-                                            "random_state" :69,
-                                            "n_jobs" :-3,           # Leaves out 2 cores for OS and other operations
                                             "cv" :CV_Regression,
                                             "alphas" :None,
                                             "n_alphas" :N_Alpha,
-                                            "l1_ratios" : L1_Ratio}
+                                            "l1_ratios" : L1_Ratio,
+                                            "random_state" :69,
+                                            "n_jobs" :-3 }         # Leaves out 2 cores for OS and other operations
             
             self.Selector_MetaData["ElasticNet_CrossValidation_splits"] = Splits
             self.Selector_MetaData["ElasticNet_Hyperparameters"] = ElasticNetCV_Hyperparameters
@@ -122,8 +128,11 @@ class FeatureSelection:
 
         return self.ElasticNet_Selected_Features
 
-    def LightGBMFeatureSelector(self , X : pd.DataFrame , y : pd.Series):
-        print("="*40,"LIGHTGBM BASED FEATURE SELECTION STARTED","="*40,sep="",end="\n\n")
+    def LightGBMFeatureSelector(self , X : pd.DataFrame , y : pd.Series) ->list:
+        ''' LightGBM based feature selection, this is done by calculating the gain
+            values when the LightGBM based is trained on the training data '''
+        
+        print("="*40,"LightGBM BASED FEATURE SELECTION STARTED","="*40,sep="",end="\n\n")
 
         if self.Is_Small_Or_Medium:                
             N_Estimators = 50
@@ -189,6 +198,9 @@ class FeatureSelection:
     
 
     def ShapFeatureSelection(self , X : pd.DataFrame , y : pd.Series):
+        ''' SHAP based feature selection. This is paired up to Random
+            Forest tree model '''
+
         print("="*40,"SHAP BASED FEATURE SELECTION STARTED","="*40,sep="",end="\n\n")
 
         if self.Is_Small_Or_Medium:                
@@ -234,4 +246,35 @@ class FeatureSelection:
         RandomForestModel.fit(X=X,y=y)
         
 
+    def Removing_Orphan_Indicators(self , Selected_Features : list) ->list :
+        ''' Removes the features (originally added as missing indicators by the imputer in cleaning class)
+            where its parent feature (original feature) are removed in feature selection '''
 
+        Surviving_Parents = {
+            feature for feature in Selected_Features
+            if not feature.startswith("missingindicator_") and not feature.endswith("_missing_value") 
+        }              # checks for all the parents and then creates a dict of its name
+
+        Clean_Features = []
+
+        for feature in Selected_Features:
+
+            if feature.startswith("missingindicator_"):
+                parent_name = feature[len("missingindicator_"):] # strips the length of "missingindicator_" from the front of the name
+            elif feature.endswith("_missing_value"):
+                parent_name = feature[:-len("_missing_value")] # strips the length of "_missing_value" from the back of the name
+            else:
+                parent_name = None
+
+            if parent_name is not None:                     # removes the orphan indicators
+                if parent_name in Surviving_Parents:     
+                    Clean_Features.append(feature)
+            else:
+                Clean_Features.append(feature)
+
+        return Clean_Features 
+            
+                    
+                    
+
+            
