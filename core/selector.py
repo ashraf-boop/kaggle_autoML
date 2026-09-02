@@ -1,16 +1,18 @@
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LogisticRegressionCV,ElasticNetCV
-from sklearn.model_selection import StratifiedKFold,KFold
 from sklearn.ensemble import RandomForestClassifier,RandomForestRegressor
-from sklearn.inspection import permutation_importance
+from lightgbm import LGBMClassifier,LGBMRegressor
+from sklearn.model_selection import StratifiedKFold,KFold
+import shap
 
 class FeatureSelection:
     def __init__(self):
         self.ElasticNet_Selected_Features = []
-        self.Permutation_Importance_Selected_Features = []
+        self.LGBM_Selected_Features = []
+        self.Union_Features = []
+        self.Shap_Selected_Features = []
         self.Final_Selected_Features = []
-        self.Negative_Permutation_Important_Features = []
         self.Is_Small_Or_Medium = False
         self.Is_Classification_Type = False
         self.Class_Imbalance = False
@@ -19,10 +21,12 @@ class FeatureSelection:
         "ElasticNet_Hyperparameters" :{},
         "ElasticNet_CrossValidation_splits" :int, 
         "ElasticNet_Features_Info" :{},
-        "Permutation_Importance_Hyperparameters" :{},
-        "Permutation_Importance_CrossValadation_Splits" :int,
-        "Permutation_Importance_Feature_Info" :{},
-        "Negative_Permutation_Importance_Feature_Info" :{},
+        "LGBM_Hyperparameters" :{},
+        "LGBM_Features_Info" :{},
+        "ElasticNet_Union_LGBM_Features" :[],
+        "Shap_Hyperparameters" :{},
+        "Shap_CrossValadation_Splits" :int,
+        "Shap_Feature_Info" :{},
         "Final_Selected_Features" :[]
         }
 
@@ -42,7 +46,7 @@ class FeatureSelection:
 
 
 
-    def ElasticNetVerification(self, X: pd.DataFrame , y: pd.Series):
+    def ElasticNetFeatureSelection(self, X: pd.DataFrame , y: pd.Series):
         print("="*40,"ELASTICNET BASED FEATURE SELECTION STARTED","="*40,sep="",end="\n\n")
 
         if self.Is_Small_Or_Medium:
@@ -85,7 +89,8 @@ class FeatureSelection:
             if Classification_Type_ElasticNet_Model.coef_.shape[0] == 1:
                 Rank = pd.Series(abs(Classification_Type_ElasticNet_Model.coef_[0]),index=X.columns)
             else:
-                Rank = pd.Series(abs(Classification_Type_ElasticNet_Model.coef_).mean(axis=0),index=X.columns) #Gets the features and their importance as calculated by l1
+                #Gets the features and their importance as calculated by l1
+                Rank = pd.Series(abs(Classification_Type_ElasticNet_Model.coef_).mean(axis=0),index=X.columns) 
               
         else:
             N_Alpha = 150 if self.Is_Small_Or_Medium else 80
@@ -107,33 +112,97 @@ class FeatureSelection:
 
             Rank = pd.Series(abs(Regression_Type_ElasticNet_Model.coef_),index=X.columns)
 
-
         Rank = Rank[Rank>0].sort_values(ascending=False)
         self.Selector_MetaData["ElasticNet_Features_Info"] = Rank.to_dict()
         self.ElasticNet_Selected_Features = Rank.index.to_list() 
+
         print(f"ElasticNet selected features amount:         {len(Rank)}")
-        print(f"ElasticNet selected features:                {Rank.index.to_list()}")
+        print(f"ElasticNet selected features(By rank):       {self.ElasticNet_Selected_Features}")
         print("-"*20,"ELASTICNET BASED FEATURE SELECTION FINISHED",sep="",end="\n\n") 
 
-    def PermutationImportanceVerification(self , X : pd.DataFrame , y : pd.Series):
-        print("="*40,"PERMUTATION IMPORTANCE BASED FEATURE SELECTION STARTED","="*40,sep="",end="\n\n")
+        return self.ElasticNet_Selected_Features
 
-        if self.Is_Small_Or_Medium:
-            Splits = 8 if len(X) < 2000 else 5
-            N_Repeats = 10                  
+    def LightGBMFeatureSelector(self , X : pd.DataFrame , y : pd.Series):
+        print("="*40,"LIGHTGBM BASED FEATURE SELECTION STARTED","="*40,sep="",end="\n\n")
+
+        if self.Is_Small_Or_Medium:                
+            N_Estimators = 50
+            Max_Depth = 4                
+            Subsample = 1
+            Subsample_Frequency = 0
+            Learning_Rate = 0.06
+        else:
+            N_Estimators = 50             
+            Max_Depth = 7                  
+            Subsample = 0.8
+            Subsample_Frequency = 1
+            Learning_Rate = 0.05
+
+        if self.Is_Classification_Type:
+
+            if self.Class_Imbalance:
+                Class_Weight = "balanced"
+            else:
+                Class_Weight = None
+
+            LGBM_Hyperparameters = {"n_estimators" : N_Estimators,
+                                    "learning_rate" : Learning_Rate,
+                                    "max_depth" : Max_Depth,
+                                    "subsample" : Subsample,
+                                    "subsample_freq" : Subsample_Frequency,
+                                    "class_weight" : Class_Weight,
+                                    "random_state" : 69, 
+                                    "n_jobs" : -3,
+                                    "verbose" : -1} 
+            
+            LGBM_Model = LGBMClassifier(**LGBM_Hyperparameters)
+
+        else:
+            LGBM_Hyperparameters = {"n_estimators" : N_Estimators,
+                                    "learning_rate" : Learning_Rate,
+                                    "max_depth" : Max_Depth,
+                                    "subsample" : Subsample,
+                                    "subsample_freq" : Subsample_Frequency,
+                                    "random_state" : 69, 
+                                    "n_jobs" : -3,
+                                    "verbose" : -1}
+
+            LGBM_Model = LGBMRegressor(**LGBM_Hyperparameters)
+
+        self.Selector_MetaData["LGBM_Hyperparameters"] = LGBM_Hyperparameters
+
+        LGBM_Model.fit(X=X,y=y)
+        LGBM_Gain = LGBM_Model.booster_.feature_importance(importance_type="gain")
+        LGBM_Gain = pd.Series(LGBM_Gain,index = X.columns)
+        LGBM_Gain = LGBM_Gain[LGBM_Gain > 0].sort_values(ascending=False)
+
+        self.Selector_MetaData["LGBM_Features_Info"] = LGBM_Gain.to_dict()
+
+        self.LGBM_Selected_Features = LGBM_Gain.index.to_list()
+
+        print(f"LightGBM selected features amount:         {len(LGBM_Gain)}")
+        print(f"LightGBM selected features(By rank):       {self.LGBM_Selected_Features}")
+        print("-"*20,"LightGBM BASED FEATURE SELECTION FINISHED",sep="",end="\n\n") 
+
+        return self.LGBM_Selected_Features
+
+    
+
+    def ShapFeatureSelection(self , X : pd.DataFrame , y : pd.Series):
+        print("="*40,"SHAP BASED FEATURE SELECTION STARTED","="*40,sep="",end="\n\n")
+
+        if self.Is_Small_Or_Medium:                
             N_Estimators = 175
             Max_Depth = 10                  
             Max_Samples = None              
         else:
             Splits = 4
-            N_Repeats = 5
             N_Estimators = 225              
             Max_Depth = 15                  
             Max_Samples = 0.8
-            
-        if self.Is_Classification_Type:
-
             CV = StratifiedKFold(n_splits=Splits,shuffle=True,random_state=69)
+
+        if self.Is_Classification_Type:
 
             if self.Class_Imbalance:
                 Class_Weight = "balanced_subsample"
@@ -142,7 +211,7 @@ class FeatureSelection:
                 Class_Weight = None
                 Scoring_Metric = "neg_log_loss" if y.nunique() == 2 else "accuracy"
 
-            RandomForestClassifier_Hyperparameters = {"n_estimators" : N_Estimators,
+            RandomForest_Hyperparameters = {"n_estimators" : N_Estimators,
                                                       "criterion" : "gini",
                                                       "max_depth" : Max_Depth,
                                                       "class_weight" : Class_Weight,
@@ -150,3 +219,19 @@ class FeatureSelection:
                                                       "n_jobs" : -3,
                                                       "random_state" : 69
                                                       }
+            RandomForestModel = RandomForestClassifier(**RandomForest_Hyperparameters)
+        else:
+
+            RandomForest_Hyperparameters = {"n_estimators" : N_Estimators,
+                                            "criterion" : "squared_error",
+                                            "max_depth" : Max_Depth,
+                                            "max_samples" : Max_Samples,
+                                            "n_jobs" : -3,
+                                            "random_state" : 69
+                                            }
+            RandomForestModel = RandomForestRegressor(**RandomForest_Hyperparameters)
+
+        RandomForestModel.fit(X=X,y=y)
+        
+
+
